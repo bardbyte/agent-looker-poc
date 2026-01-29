@@ -1,0 +1,35 @@
+# MCP Toolbox configuration for Looker
+# Reference: https://googleapis.github.io/genai-toolbox/resources/tools/Looker/
+
+sources:
+  my-looker:
+    kind: looker
+    base_url: $LOOKER_INSTANCE_URL
+    client_id: $LOOKER_CLIENT_ID
+    client_secret: $LOOKER_CLIENT_SECRET
+    verify_ssl: true
+    timeout: 120s
+
+# Toolsets allow loading groups of tools together
+toolsets:
+  # Core tools for data exploration and querying
+  data-exploration:
+    - get-models
+    - get-explores
+    - get-dimensions
+    - get-measures
+    - get-filters
+    - get-parameters
+    - query
+    - query-sql
+
+  # Tools for working with saved content
+  saved-contents:
+    - run-look
+    - get-dashboards
+
+  # Tools for LookML project exploration
+  lookml-projects:
+    - get-projects
+    - get-project-files
+    - get-project-file

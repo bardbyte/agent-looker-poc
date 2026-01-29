@@ -81,28 +81,162 @@ This repository provides a **production-ready skeleton** demonstrating how to bu
 ```
 dmp-sl-agent/
 ├── README.md                 # This file
-├── requirements.txt          # Python dependencies
+├── requirements.txt          # Python dependencies (version-pinned)
+├── setup.sh                  # Automated setup script
 ├── .env.example              # Environment variable template
-│
-├── src/
-│   ├── __init__.py
-│   ├── orchestrator.py       # Agentic reasoning loop
-│   ├── callbacks.py          # Thinking event system
-│   └── session.py            # Conversation & memory management
-│
-├── config/
-│   └── prompts/
-│       └── system.py         # System prompts by domain
-│
-├── examples/
-│   ├── cli_chat.py           # Interactive CLI demo
-│   ├── api_server.py         # REST API example
-│   └── streamlit_app.py      # Web UI example
-│
-└── tests/
-    ├── __init__.py
-    ├── test_orchestrator.py
-    └── test_callbacks.py
+├── tools.yaml                # MCP Toolbox configuration
+├── chat.py                   # Main agent implementation
+└── __init__.py               # Package exports
+```
+
+---
+
+## Quick Start
+
+### Option 1: Automated Setup (Recommended)
+
+```bash
+# Clone the repository
+git clone https://github.com/bardbyte/agent-looker-poc.git
+cd agent-looker-poc
+
+# Run the setup script
+chmod +x setup.sh
+./setup.sh
+```
+
+The setup script will:
+1. Create a Python virtual environment
+2. Install all dependencies with correct versions
+3. **Verify `langchain-core==0.3.83`** (critical for compatibility)
+4. Interactively collect your credentials (CIBIS, Looker)
+5. Generate the `.env` file
+6. Download and install MCP Toolbox
+7. Optionally start the MCP server and chat agent
+
+### Option 2: Manual Setup
+
+```bash
+# 1. Create virtual environment
+python3 -m venv venv
+source venv/bin/activate
+
+# 2. Install dependencies
+pip install -r requirements.txt
+
+# 3. CRITICAL: Verify langchain-core version
+pip show langchain-core | grep Version
+# Must be 0.3.83 - if not, run:
+pip install langchain-core==0.3.83 --force-reinstall
+
+# 4. Configure environment
+cp .env.example .env
+# Edit .env with your credentials
+
+# 5. Download MCP Toolbox
+curl -L -o toolbox https://github.com/googleapis/genai-toolbox/releases/latest/download/toolbox-darwin-arm64
+chmod +x toolbox
+
+# 6. Start MCP server (Terminal 1)
+source .env
+./toolbox --tools-file tools.yaml
+
+# 7. Run the agent (Terminal 2)
+source venv/bin/activate
+python chat.py
+```
+
+---
+
+## Critical: Dependency Version
+
+> **`langchain-core` must be exactly version `0.3.83`**
+
+The `safechain` library may install an incompatible version of `langchain-core`. The setup script automatically detects and fixes this, but if installing manually:
+
+```bash
+# After pip install, verify:
+pip show langchain-core | grep Version
+# Output should be: Version: 0.3.83
+
+# If not, force reinstall:
+pip install langchain-core==0.3.83 --force-reinstall
+```
+
+---
+
+## Configuration
+
+### Environment Variables
+
+| Variable | Description | Required |
+|----------|-------------|----------|
+| `CIBIS_CONSUMER_KEY` | Enterprise IdaaS consumer key | Yes |
+| `CIBIS_CONSUMER_SECRET` | Enterprise IdaaS consumer secret | Yes |
+| `CIBIS_CONFIGURATION_ID` | Enterprise IdaaS configuration ID | Yes |
+| `CONFIG_PATH` | Path to config.yml | Yes |
+| `LOOKER_INSTANCE_URL` | Looker instance URL | Yes |
+| `LOOKER_CLIENT_ID` | Looker API client ID | Yes |
+| `LOOKER_CLIENT_SECRET` | Looker API client secret | Yes |
+| `LOG_LEVEL` | Logging verbosity (INFO/DEBUG) | No |
+
+### tools.yaml
+
+The `tools.yaml` file configures which Looker tools are available:
+
+```yaml
+sources:
+  my-looker:
+    kind: looker
+    base_url: $LOOKER_INSTANCE_URL
+    client_id: $LOOKER_CLIENT_ID
+    client_secret: $LOOKER_CLIENT_SECRET
+    verify_ssl: true
+    timeout: 120s
+
+toolsets:
+  data-exploration:
+    - get-models
+    - get-explores
+    - get-dimensions
+    - get-measures
+    - get-filters
+    - get-parameters
+    - query
+    - query-sql
+
+  saved-contents:
+    - run-look
+    - get-dashboards
+
+  lookml-projects:
+    - get-projects
+    - get-project-files
+    - get-project-file
+```
+
+---
+
+## Running the Agent
+
+### Two-Terminal Setup
+
+```bash
+# Terminal 1: Start MCP Toolbox server
+source venv/bin/activate
+source .env
+./toolbox --tools-file tools.yaml
+
+# Terminal 2: Run chat agent
+source venv/bin/activate
+python chat.py
+```
+
+### Single Command (via setup.sh)
+
+```bash
+./setup.sh
+# Select "y" when prompted to start services
 ```
 
 ---
@@ -155,7 +289,6 @@ class ThinkingCallback(ABC):
 class ConsoleThinkingCallback    # CLI output with rich formatting
 class WebSocketThinkingCallback  # Stream to web UI
 class LoggingThinkingCallback    # Enterprise logging systems
-class MetricsThinkingCallback    # Observability platforms
 ```
 
 ### 3. Conversation Memory
@@ -213,31 +346,6 @@ User: "Show me top products by revenue"
 
 ---
 
-## Quick Start
-
-### 1. Clone and Install
-
-```bash
-git clone <repo-url>
-cd dmp-sl-agent
-pip install -r requirements.txt
-```
-
-### 2. Configure Environment
-
-```bash
-cp .env.example .env
-# Edit .env with your credentials
-```
-
-### 3. Run the Demo
-
-```bash
-python -m examples.cli_chat
-```
-
----
-
 ## Example Session
 
 ```
@@ -285,202 +393,39 @@ You: How does that compare to last year?
 ╰─────────────────────────────────────────────╯
 ```
 
-Notice how the agent remembers context — the follow-up query "How does that compare to last year?" works without repeating the product/revenue context.
+Notice how the agent remembers context — the follow-up query works without repeating the product/revenue context.
 
 ---
 
-## Enterprise Integration Patterns
+## Troubleshooting
 
-### Pattern 1: REST API Service
+### langchain-core version mismatch
 
-```python
-from fastapi import FastAPI
-from src import AgentOrchestrator
-
-app = FastAPI()
-
-@app.post("/query")
-async def query(request: QueryRequest):
-    orchestrator = AgentOrchestrator(
-        model_id="gemini-pro",
-        tools=await load_mcp_tools(),
-    )
-    return await orchestrator.run([
-        {"role": "user", "content": request.question}
-    ])
+```
+Error: incompatible langchain-core version
 ```
 
-### Pattern 2: Streaming Web UI
-
-```python
-class WebSocketThinkingCallback(ThinkingCallback):
-    def __init__(self, websocket):
-        self.ws = websocket
-
-    def on_thinking(self, event: ThinkingEvent):
-        asyncio.create_task(self.ws.send_json({
-            "type": event.type.value,
-            "content": event.content,
-        }))
-```
-
-### Pattern 3: Custom Domain Tools
-
-```python
-# Load MCP tools from configured servers
-tools = await MCPToolLoader.load_tools(config)
-
-# Add domain-specific tools
-tools.extend([
-    create_compliance_check_tool(),
-    create_data_masking_tool(),
-    create_audit_logging_tool(),
-])
-```
-
----
-
-## Configuration
-
-### Environment Variables
-
-| Variable | Description | Required |
-|----------|-------------|----------|
-| `IDAAS_CLIENT_ID` | Enterprise auth client ID | Yes |
-| `IDAAS_CLIENT_SECRET` | Enterprise auth secret | Yes |
-| `MODEL_API_KEY` | LLM API key | Yes |
-| `MCP_SERVER_URL` | MCP server endpoint | Yes |
-| `LOG_LEVEL` | Logging verbosity | No |
-
-### System Prompts
-
-Customize agent behavior for your domain:
-
-```python
-# config/prompts/system.py
-
-FINANCE_PROMPT = """You are a financial analyst assistant.
-Always verify compliance requirements before querying sensitive data.
-..."""
-
-SALES_PROMPT = """You are a sales analytics assistant.
-Focus on revenue, pipeline, and conversion metrics.
-..."""
-```
-
----
-
-## Setting Up Looker MCP Locally
-
-### Prerequisites
-
-1. **Looker API Credentials** — Get a Client ID and Secret from your Looker Admin panel:
-   - Go to Admin → Users → Edit User → API Keys
-   - Create a new API key pair
-
-2. **Looker Base URL** — Your instance URL (e.g., `https://yourcompany.looker.com`)
-   - Note: Some instances use port 19999 for API (`https://yourcompany.looker.com:19999`)
-
-### Option 1: Using MCP Toolbox Binary (Recommended)
-
+**Fix:**
 ```bash
-# 1. Download MCP Toolbox (v0.14.0+)
-# macOS ARM64
-curl -L -o toolbox https://github.com/googleapis/genai-toolbox/releases/latest/download/toolbox-darwin-arm64
-chmod +x toolbox
-
-# macOS Intel
-curl -L -o toolbox https://github.com/googleapis/genai-toolbox/releases/latest/download/toolbox-darwin-amd64
-chmod +x toolbox
-
-# Linux
-curl -L -o toolbox https://github.com/googleapis/genai-toolbox/releases/latest/download/toolbox-linux-amd64
-chmod +x toolbox
+pip install langchain-core==0.3.83 --force-reinstall
 ```
 
+### MCP Toolbox connection failed
+
+```
+Error: Make sure MCP servers are running
+```
+
+**Fix:** Ensure the toolbox server is running in a separate terminal:
 ```bash
-# 2. Run the server
-export LOOKER_BASE_URL="https://yourcompany.looker.com"
-export LOOKER_CLIENT_ID="your-client-id"
-export LOOKER_CLIENT_SECRET="your-client-secret"
-
-./toolbox --stdio --prebuilt looker
+./toolbox --tools-file tools.yaml
 ```
 
-### Option 2: Using NPX (No Download)
+### Looker authentication failed
 
-```bash
-npx -y @anthropic-ai/toolbox-server --prebuilt looker --stdio
-```
-
-Set environment variables before running:
-```bash
-export LOOKER_BASE_URL="https://yourcompany.looker.com"
-export LOOKER_CLIENT_ID="your-client-id"
-export LOOKER_CLIENT_SECRET="your-client-secret"
-```
-
-### MCP Configuration File
-
-Create `.mcp.json` in project root:
-
-```json
-{
-  "mcpServers": {
-    "looker": {
-      "command": "./toolbox",
-      "args": ["--stdio", "--prebuilt", "looker"],
-      "env": {
-        "LOOKER_BASE_URL": "https://yourcompany.looker.com",
-        "LOOKER_CLIENT_ID": "your-client-id",
-        "LOOKER_CLIENT_SECRET": "your-client-secret",
-        "LOOKER_VERIFY_SSL": "true"
-      }
-    }
-  }
-}
-```
-
-### Available Tools
-
-Once running, the Looker MCP exposes these tools:
-
-| Tool | Description |
-|------|-------------|
-| `get_models` | List available LookML models |
-| `get_explores` | Get explores within a model |
-| `get_dimensions` | Get dimensions for an explore |
-| `get_measures` | Get measures for an explore |
-| `query` | Execute a query against Looker |
-| `get_projects` | List LookML projects |
-| `get_project_files` | List files in a project |
-
-### Verify Connection
-
-```bash
-# Test the MCP server is responding
-echo '{"jsonrpc":"2.0","method":"tools/list","id":1}' | ./toolbox --stdio --prebuilt looker
-```
-
----
-
-## Technical Notes
-
-### LLM Access
-
-The agent accesses the LLM through SafeChain, which handles enterprise authentication (IdaaS) and model routing. MCP tools are bound to the LLM using SafeChain's tool adapter layer.
-
-### Tool Binding
-
-```python
-from safechain.tools.mcp import MCPToolLoader, MCPToolAgent
-
-# Load tools from MCP servers
-tools = await MCPToolLoader.load_tools(config)
-
-# Create tool-augmented agent
-agent = MCPToolAgent(model_id, tools)
-```
+**Fix:** Verify your Looker credentials in `.env`:
+- `LOOKER_INSTANCE_URL` should be the full URL (e.g., `https://company.looker.com`)
+- Some instances use port 19999: `https://company.looker.com:19999`
 
 ---
 
@@ -492,61 +437,6 @@ agent = MCPToolAgent(model_id, tools)
 | **Callback-based observability** | Decouples visualization from core logic; supports multiple outputs |
 | **Message-based memory** | Compatible with LLM context windows; easy to persist |
 | **MCP for tool integration** | Industry standard; vendor-agnostic; extensive ecosystem |
-
----
-
-## Extending the PoC
-
-### Add New Data Sources
-
-1. Deploy an MCP server for your data source
-2. Add server URL to configuration
-3. Agent automatically discovers new tools
-
-### Add Custom Reasoning
-
-```python
-# Override the orchestrator for domain-specific logic
-class ComplianceAwareOrchestrator(AgentOrchestrator):
-    async def run(self, messages):
-        # Pre-check: Verify user permissions
-        await self.verify_data_access(messages)
-
-        # Run standard orchestration
-        result = await super().run(messages)
-
-        # Post-check: Audit logging
-        await self.log_query_audit(messages, result)
-
-        return result
-```
-
-### Production Hardening
-
-- [ ] Add rate limiting and quotas
-- [ ] Implement query result caching
-- [ ] Add circuit breakers for MCP servers
-- [ ] Set up distributed tracing
-- [ ] Configure alerting on error rates
-
----
-
-## Performance Considerations
-
-| Metric | Typical Range | Optimization |
-|--------|---------------|--------------|
-| Query latency | 2-10s | Cache frequent queries |
-| Token usage | 1-5K per query | Tune max_iterations |
-| Memory footprint | ~50MB | Limit conversation history |
-
----
-
-## Security Notes
-
-- All credentials managed via environment variables
-- MCP tools enforce row-level security at source
-- Conversation history can be encrypted at rest
-- Audit trail available via thinking callbacks
 
 ---
 
