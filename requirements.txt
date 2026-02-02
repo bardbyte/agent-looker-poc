@@ -19,8 +19,9 @@ httpx==0.27.0  # async HTTP client
 # If you have version conflicts, try: langgraph==0.2.50, langchain-core==0.3.28
 
 safechain
-langgraph==0.2.50          # V2 agent orchestration
-langchain-core==0.3.83     # MUST be this exact version - installed AFTER safechain
+langgraph==0.2.50              # V2 agent orchestration
+langchain-core==0.3.83         # MUST be this exact version - installed AFTER safechain
+langchain-mcp-adapter==2.1.7   # MUST be this exact version - MCP to LangChain bridge
 
 # ============================================================================
 # MCP SDK (Model Context Protocol)

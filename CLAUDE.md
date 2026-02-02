@@ -56,13 +56,16 @@ for tr in tool_results:
 ```
 safechain
 langgraph==0.2.50
-langchain-core==0.3.83  # MUST be exact version - installed AFTER safechain
+langchain-core==0.3.83           # MUST be exact version - installed AFTER safechain
+langchain-mcp-adapter==2.1.7     # MUST be exact version - MCP to LangChain bridge
 mcp==1.0.0
 httpx-sse==0.4.0
 rich==13.0.0
 ```
 
-**Important**: `langchain-core==0.3.83` must be this exact version. SafeChain may install an incompatible version - override it.
+**Important**:
+- `langchain-core==0.3.83` must be this exact version. SafeChain may install an incompatible version - override it.
+- `langchain-mcp-adapter==2.1.7` bridges MCP tools to LangChain. Version must match.
 
 ## MCP Tools Configuration
 
