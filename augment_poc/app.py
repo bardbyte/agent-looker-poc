@@ -6,12 +6,14 @@ A Data Steward Assistant for:
 2. Gap analysis and approval workflow
 3. LookML generation from enriched metadata
 4. SQL to LookML conversion
+5. Git integration for PR creation
 """
 
 import streamlit as st
 import json
+import os
 from datetime import datetime
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 
 from models import (
     TableMetadata, ColumnMetadata, EnrichmentSuggestion,
@@ -21,6 +23,7 @@ from mdm_client import MDMClient, analyze_gaps, get_mock_table
 from enrichment_agent import EnrichmentAgent, EnrichmentResult
 from lookml_generator import generate_view, generate_derived_table_view
 from sql_parser import parse_sql_to_lookml
+from git_integration import GitConfig, LookMLDeployer, MockGitDeployer, PRResult, get_deployer
 
 
 # ============================================================================
@@ -51,6 +54,14 @@ def init_session_state():
         "sql_lookml": None,
         "use_mock": True,  # Start with mock data
         "agent": None,
+        # Git integration
+        "git_repo_url": os.getenv("LOOKER_GIT_REPO_URL", ""),
+        "github_token": os.getenv("GITHUB_TOKEN", ""),
+        "git_default_branch": os.getenv("LOOKER_GIT_DEFAULT_BRANCH", "main"),
+        "git_views_path": os.getenv("LOOKER_GIT_VIEWS_PATH", "views"),
+        "use_mock_git": True,  # Start with mock Git
+        "pr_history": [],  # Track created PRs
+        "last_pr_result": None,
     }
     for key, value in defaults.items():
         if key not in st.session_state:
@@ -73,7 +84,7 @@ def render_sidebar():
         st.divider()
 
         # Mode toggle
-        st.subheader("⚙️ Settings")
+        st.subheader("⚙️ Data Settings")
         st.session_state.use_mock = st.toggle(
             "Use Mock Data",
             value=st.session_state.use_mock,
@@ -87,6 +98,47 @@ def render_sidebar():
 
         st.divider()
 
+        # Git Settings
+        st.subheader("🔗 Git Settings")
+        st.session_state.use_mock_git = st.toggle(
+            "Use Mock Git",
+            value=st.session_state.use_mock_git,
+            help="Toggle between mock Git and real GitHub integration"
+        )
+
+        if not st.session_state.use_mock_git:
+            with st.expander("Configure Git", expanded=False):
+                st.session_state.git_repo_url = st.text_input(
+                    "Git Repo URL",
+                    value=st.session_state.git_repo_url,
+                    placeholder="https://github.com/org/looker-models.git",
+                    type="default"
+                )
+                st.session_state.github_token = st.text_input(
+                    "GitHub Token",
+                    value=st.session_state.github_token,
+                    type="password",
+                    help="Personal access token with repo permissions"
+                )
+                st.session_state.git_default_branch = st.text_input(
+                    "Default Branch",
+                    value=st.session_state.git_default_branch,
+                )
+                st.session_state.git_views_path = st.text_input(
+                    "Views Path",
+                    value=st.session_state.git_views_path,
+                    help="Path within repo for view files"
+                )
+
+            if st.session_state.git_repo_url and st.session_state.github_token:
+                st.success("✅ Git configured")
+            else:
+                st.warning("⚠️ Configure Git above")
+        else:
+            st.info("🧪 Using mock Git for demo")
+
+        st.divider()
+
         # Quick stats
         if st.session_state.table_metadata:
             st.subheader("📊 Current Table")
@@ -97,6 +149,13 @@ def render_sidebar():
             if st.session_state.gap_analysis:
                 gaps = st.session_state.gap_analysis
                 st.metric("Completion", f"{gaps.completion_rate:.0f}%")
+
+        # PR History
+        if st.session_state.pr_history:
+            st.divider()
+            st.subheader("📋 PR History")
+            for pr in st.session_state.pr_history[-3:]:  # Show last 3
+                st.write(f"• [{pr['table']}]({pr['url']})")
 
         st.divider()
 
@@ -633,11 +692,237 @@ def render_output_tab():
                     mime="application/json"
                 )
 
-        # Git PR placeholder
+        # Git PR Creation
         st.divider()
-        st.subheader("🔗 Git Integration")
-        st.info("📌 **Phase 2**: Create PR with generated LookML files")
-        st.button("Create Pull Request", disabled=True)
+        render_git_integration()
+
+
+# ============================================================================
+# Git Integration
+# ============================================================================
+
+def get_enrichment_summary() -> Dict:
+    """Build enrichment summary for PR description."""
+    summary = {
+        "total_columns": 0,
+        "labels_added": 0,
+        "descriptions_added": 0,
+        "sensitivity_tags": 0,
+    }
+
+    if st.session_state.table_metadata:
+        summary["total_columns"] = len(st.session_state.table_metadata.columns)
+
+    for col_name, enriched in st.session_state.enriched_columns.items():
+        if enriched.enriched_label:
+            summary["labels_added"] += 1
+        if enriched.enriched_description:
+            summary["descriptions_added"] += 1
+        if enriched.enriched_sensitivity:
+            summary["sensitivity_tags"] += 1
+
+    return summary
+
+
+def render_git_integration():
+    """Render Git integration section for PR creation."""
+    st.subheader("🔗 Git Integration")
+
+    # Check if we have content to deploy
+    has_table_lookml = st.session_state.generated_lookml is not None
+    has_sql_lookml = st.session_state.sql_lookml is not None
+
+    if not has_table_lookml and not has_sql_lookml:
+        st.info("Generate LookML first to enable Git integration")
+        return
+
+    # Show what can be deployed
+    st.write("**Available for deployment:**")
+    deploy_options = []
+
+    if has_table_lookml:
+        table_name = st.session_state.table_metadata.table_name
+        deploy_options.append(("table", table_name, st.session_state.generated_lookml))
+        st.write(f"✅ Table view: `{table_name}.view.lkml`")
+
+    if has_sql_lookml:
+        sql_view_name = st.session_state.sql_parse_result.view_name
+        deploy_options.append(("sql", sql_view_name, st.session_state.sql_lookml))
+        st.write(f"✅ SQL view: `{sql_view_name}.view.lkml`")
+
+    st.divider()
+
+    # Deployment form
+    with st.form("git_deploy_form"):
+        st.write("**Create Pull Request**")
+
+        # Select what to deploy
+        selected_views = st.multiselect(
+            "Select views to deploy",
+            options=[opt[1] for opt in deploy_options],
+            default=[opt[1] for opt in deploy_options],
+            help="Choose which generated views to include in the PR"
+        )
+
+        col1, col2 = st.columns(2)
+        with col1:
+            create_draft = st.checkbox("Create as draft PR", value=True)
+        with col2:
+            add_labels = st.checkbox("Add labels", value=True)
+
+        # Custom PR title (optional)
+        custom_title = st.text_input(
+            "Custom PR title (optional)",
+            placeholder="Leave empty for auto-generated title"
+        )
+
+        # Reviewers (optional)
+        reviewers = st.text_input(
+            "Reviewers (comma-separated GitHub usernames)",
+            placeholder="user1, user2"
+        )
+
+        submitted = st.form_submit_button("🚀 Create Pull Request", type="primary")
+
+        if submitted:
+            if not selected_views:
+                st.error("Please select at least one view to deploy")
+            else:
+                create_pull_request(
+                    deploy_options,
+                    selected_views,
+                    create_draft,
+                    add_labels,
+                    custom_title,
+                    reviewers
+                )
+
+    # Show last PR result
+    if st.session_state.last_pr_result:
+        st.divider()
+        render_pr_result(st.session_state.last_pr_result)
+
+
+def create_pull_request(
+    deploy_options: list,
+    selected_views: list,
+    create_draft: bool,
+    add_labels: bool,
+    custom_title: str,
+    reviewers: str
+):
+    """Create a Pull Request with the selected views."""
+    with st.spinner("Creating Pull Request..."):
+        # Get or create deployer
+        if st.session_state.use_mock_git:
+            deployer = MockGitDeployer()
+        else:
+            config = GitConfig(
+                repo_url=st.session_state.git_repo_url,
+                default_branch=st.session_state.git_default_branch,
+                views_path=st.session_state.git_views_path,
+                github_token=st.session_state.github_token,
+            )
+            deployer = LookMLDeployer(config)
+
+        # Deploy each selected view
+        results = []
+        for opt_type, view_name, lookml_content in deploy_options:
+            if view_name not in selected_views:
+                continue
+
+            summary = get_enrichment_summary() if opt_type == "table" else {
+                "total_columns": len(st.session_state.sql_parse_result.dimensions) +
+                                len(st.session_state.sql_parse_result.measures),
+                "labels_added": 0,
+                "descriptions_added": 0,
+                "sensitivity_tags": 0,
+            }
+
+            labels = ["ai-enrichment", "lookml"] if add_labels else None
+            reviewer_list = [r.strip() for r in reviewers.split(",") if r.strip()] if reviewers else None
+
+            result = deployer.deploy_lookml(
+                table_name=view_name,
+                lookml_content=lookml_content,
+                enrichment_summary=summary,
+                create_pr=True,
+                draft=create_draft,
+                labels=labels,
+            )
+            results.append((view_name, result))
+
+        # Store results
+        if results:
+            # Use first result as the main result
+            view_name, result = results[0]
+            st.session_state.last_pr_result = {
+                "view_name": view_name,
+                "result": result,
+                "timestamp": datetime.now().isoformat(),
+            }
+
+            # Add to history
+            if result.success and result.pr_url:
+                st.session_state.pr_history.append({
+                    "table": view_name,
+                    "url": result.pr_url,
+                    "timestamp": datetime.now().isoformat(),
+                })
+
+            st.rerun()
+
+
+def render_pr_result(pr_data: Dict):
+    """Render the result of PR creation."""
+    result: PRResult = pr_data["result"]
+    view_name = pr_data["view_name"]
+
+    if result.success:
+        st.success(f"✅ Pull Request created for `{view_name}`!")
+
+        col1, col2 = st.columns(2)
+        with col1:
+            st.metric("Branch", result.branch_name or "N/A")
+        with col2:
+            st.metric("PR #", result.pr_number or "N/A")
+
+        if result.pr_url:
+            st.markdown(f"**🔗 [View Pull Request]({result.pr_url})**")
+
+        if result.files_changed:
+            with st.expander("Files changed", expanded=False):
+                for f in result.files_changed:
+                    st.code(f)
+
+        # Show PR body preview
+        if st.session_state.use_mock_git:
+            with st.expander("📝 PR Preview (Mock)", expanded=False):
+                st.markdown(f"""
+## Summary
+
+AI-powered metadata enrichment for `{view_name}`.
+
+### Enrichment Statistics
+
+| Metric | Count |
+|--------|-------|
+| Labels Added | {get_enrichment_summary().get('labels_added', 0)} |
+| Descriptions Added | {get_enrichment_summary().get('descriptions_added', 0)} |
+| Sensitivity Tags | {get_enrichment_summary().get('sensitivity_tags', 0)} |
+
+### Review Checklist
+
+- [ ] Labels are business-friendly and accurate
+- [ ] Descriptions clearly explain column purpose
+- [ ] Sensitivity classifications are correct
+
+---
+🤖 Generated by Semantic Enrichment Agent
+                """)
+
+    else:
+        st.error(f"❌ Failed to create PR: {result.error}")
 
 
 # ============================================================================
