@@ -12,7 +12,11 @@ sources:
 
 # Toolsets allow loading groups of tools together
 toolsets:
-  # Core tools for data exploration and querying
+  # Conversational analytics — NLQ via Looker's semantic model
+  conversational-analytics:
+    - conversational-analytics
+
+  # Schema discovery and querying
   data-exploration:
     - get-models
     - get-explores
@@ -22,14 +26,50 @@ toolsets:
     - get-parameters
     - query
     - query-sql
+    - query-url
 
-  # Tools for working with saved content
+  # Saved content
   saved-contents:
+    - get-looks
     - run-look
     - get-dashboards
+    - run-dashboard
 
-  # Tools for LookML project exploration
+  # Content creation
+  content-creation:
+    - make-look
+    - make-dashboard
+    - add-dashboard-element
+    - add-dashboard-filter
+    - generate-embed-url
+
+  # LookML project management
   lookml-projects:
     - get-projects
     - get-project-files
     - get-project-file
+    - get-project-directories
+    - create-project-file
+    - create-project-directory
+    - update-project-file
+    - delete-project-file
+    - delete-project-directory
+    - create-view-from-table
+    - validate-project
+    - dev-mode
+
+  # Database connections
+  connections:
+    - get-connections
+    - get-connection-databases
+    - get-connection-schemas
+    - get-connection-tables
+    - get-connection-table-columns
+
+  # Health and testing
+  health:
+    - health-pulse
+    - health-analyze
+    - health-vacuum
+    - get-lookml-tests
+    - run-lookml-tests
